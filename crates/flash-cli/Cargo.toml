@@ -1,0 +1,24 @@
+[package]
+name = "flash-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "flash"
+path = "src/main.rs"
+
+[dependencies]
+flash-core.workspace = true
+flash-store.workspace = true
+flash-engine.workspace = true
+flash-stub.workspace = true
+flash-adapter.workspace = true
+flash-adapter-code.workspace = true
+flash-adapter-doc.workspace = true
+flash-adapter-sheets.workspace = true
+flash-adapter-slides.workspace = true
+flash-orchestrator.workspace = true
+flash-server.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
