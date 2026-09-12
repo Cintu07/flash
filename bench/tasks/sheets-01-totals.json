@@ -1,0 +1,32 @@
+{
+  "id": "sheets-01-totals",
+  "kind": "sheets",
+  "instruction": "add a total row and assert it matches the sum of the quarters",
+  "files": {
+    "model.workbook.json": "{\n  \"sheets\": [\"Sheet1\"],\n  \"cells\": {\n    \"Sheet1!A1\": \"quarter\",\n    \"Sheet1!B1\": \"usd\",\n    \"Sheet1!A2\": \"Q1\",\n    \"Sheet1!B2\": \"100\",\n    \"Sheet1!A3\": \"Q2\",\n    \"Sheet1!B3\": \"120\",\n    \"Sheet1!A4\": \"Q3\",\n    \"Sheet1!B4\": \"140\"\n  },\n  \"names\": {},\n  \"assertions\": []\n}\n"
+  },
+  "targets": ["model.workbook.json"],
+  "plan": {
+    "edits": [
+      {
+        "path": "model.workbook.json",
+        "target": "cell:Sheet1!B4",
+        "instruction": "add a total under the quarters and assert it"
+      }
+    ]
+  },
+  "executor": [
+    [
+      "",
+      [
+        { "op": "set_values", "cells": { "A6": "total" } },
+        { "op": "set_formula", "cell": "B6", "formula": "=SUM(B2:B4)" },
+        { "op": "assert", "expression": "B6=360" }
+      ]
+    ]
+  ],
+  "warm_change": [
+    "model.workbook.json",
+    "{\n  \"sheets\": [\"Sheet1\"],\n  \"cells\": {\n    \"Sheet1!A1\": \"quarter\",\n    \"Sheet1!B1\": \"usd\",\n    \"Sheet1!A2\": \"Q1\",\n    \"Sheet1!B2\": \"100\",\n    \"Sheet1!A3\": \"Q2\",\n    \"Sheet1!B3\": \"120\",\n    \"Sheet1!A4\": \"Q3\",\n    \"Sheet1!B4\": \"140\",\n    \"Sheet1!A5\": \"note\"\n  },\n  \"names\": {},\n  \"assertions\": []\n}\n"
+  ]
+}
