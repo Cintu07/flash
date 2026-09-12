@@ -1,0 +1,34 @@
+{
+  "id": "doc-01-quarterly-section",
+  "kind": "doc",
+  "instruction": "update the revenue section for the new quarter's numbers",
+  "files": {
+    "report.md": "---\ntitle: Quarterly report\n---\n\n# Quarterly report\n\nThis report covers the quarter.\n\n## Methodology\n\nFigures come from the ledger export, deduplicated by invoice id.\n\n## Definitions\n\nRevenue is recognised on delivery.\n\n## Revenue\n\nRevenue was flat against the previous quarter.\n\n| quarter | usd |\n| ------- | --- |\n| Q2      | 100 |\n\n## Outlook\n\nWe expect the pipeline to convert next quarter.\n"
+  },
+  "targets": ["report.md"],
+  "plan": {
+    "edits": [
+      {
+        "path": "report.md",
+        "target": "p:revenue/1",
+        "instruction": "restate the revenue paragraph with the new figure"
+      }
+    ]
+  },
+  "executor": [
+    [
+      "",
+      [
+        {
+          "op": "replace_block",
+          "block": "p:revenue/1",
+          "text": "Revenue grew 12 percent against the previous quarter, driven by renewals."
+        }
+      ]
+    ]
+  ],
+  "warm_change": [
+    "report.md",
+    "---\ntitle: Quarterly report\n---\n\n# Quarterly report\n\nThis report covers the quarter.\n\n## Methodology\n\nFigures come from the ledger export, deduplicated by invoice id.\n\n## Definitions\n\nRevenue is recognised on delivery.\n\n## Revenue\n\nRevenue was flat against the previous quarter.\n\n| quarter | usd |\n| ------- | --- |\n| Q3      | 112 |\n\n## Outlook\n\nWe expect the pipeline to convert next quarter.\n"
+  ]
+}
