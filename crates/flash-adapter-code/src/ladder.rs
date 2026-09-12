@@ -358,8 +358,27 @@ impl VerifyRung for ImpactedTests {
             return RungOutcome::unavailable("no workspace directory for the test rung");
         };
         if ctx.impact.tests.is_empty() {
-            // Nothing reachable. That is a result, not a skip: the delta touched no tested code.
-            return RungOutcome::pass();
+            if ctx.delta.is_empty() {
+                // Nothing changed, so nothing is reachable. That is a result, not a skip.
+                return RungOutcome::pass();
+            }
+
+            // Something changed and selection found no tests for it. Do not believe that.
+            //
+            // Test selection here is a syntactic approximation, and measuring it on this
+            // repository showed it under-selecting badly on exactly the entities that matter
+            // most: a change to the core hashing function resolved to zero tests, because its
+            // name is too short and too common to resolve across files. Passing on an empty
+            // selection turns that into a green run, which is the one outcome that makes the
+            // whole runtime untrustworthy. Running everything costs minutes; believing a false
+            // green costs the premise.
+            return match run_tool(&self.tool, ws, &[]) {
+                Err(e) => {
+                    RungOutcome::unavailable(format!("{} could not run: {e}", self.tool.program))
+                }
+                Ok(out) if out.status.success() => RungOutcome::pass(),
+                Ok(out) => RungOutcome::fail(summarise_test_failure(&out, "the suite")),
+            };
         }
 
         let selected: Vec<&String> = ctx.impact.tests.iter().collect();
@@ -620,7 +639,7 @@ mod tests {
     }
 
     #[test]
-    fn no_impacted_tests_is_a_pass_not_a_skip() {
+    fn an_empty_delta_means_nothing_to_run() {
         let art = Artifact::new("x.rs", b"fn a() {}\n".to_vec());
         let outline = symbols::outline(rust(), &art).unwrap();
         let d = Delta::default();
@@ -639,5 +658,39 @@ mod tests {
             workspace: Some(dir.path()),
         };
         assert!(rung.check(&ctx).passed);
+    }
+
+    #[test]
+    fn a_change_that_selected_no_tests_falls_back_to_the_suite() {
+        // The safety property. Selection is an approximation that was measured under-selecting on
+        // this very repository, so an empty selection against a real delta must not read as a
+        // pass. There is no toolchain in this temp directory, so the rung reports unavailable,
+        // which proves it tried to run something rather than passing for free.
+        let art = Artifact::new("x.rs", b"fn a() {}\n".to_vec());
+        let outline = symbols::outline(rust(), &art).unwrap();
+        let d = Delta {
+            changed: vec!["fn:a".into()],
+            ..Default::default()
+        };
+        let i = ImpactSet::default();
+        let dir = tempfile::tempdir().unwrap();
+        let rung = ImpactedTests {
+            tool: ToolSpec::new("definitely-not-a-real-program-xyz", &[]),
+            expected_ms: 3000,
+            fallback_to_all_above: 10,
+        };
+        let ctx = VerifyCtx {
+            artifact: &art,
+            outline: &outline,
+            delta: &d,
+            impact: &i,
+            workspace: Some(dir.path()),
+        };
+        let outcome = rung.check(&ctx);
+        assert!(
+            !outcome.passed,
+            "an empty selection against a real change must never pass for free"
+        );
+        assert!(outcome.unavailable, "{outcome:?}");
     }
 }

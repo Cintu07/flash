@@ -274,7 +274,7 @@ fn resolve_refs(spec: &LangSpec, src: &[u8], entities: &mut [Entity]) {
 
 /// Identifier-shaped words. A tokenizer rather than a regex: fewer dependencies, and it is the
 /// hot path when a repo is first indexed.
-fn identifiers(text: &str) -> Vec<&str> {
+pub(crate) fn identifiers(text: &str) -> Vec<&str> {
     let bytes = text.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;

@@ -28,6 +28,7 @@
 
 pub mod diff;
 pub mod impact;
+pub mod index;
 pub mod ladder;
 pub mod lang;
 pub mod ops;
@@ -70,6 +71,12 @@ impl Default for ToolConfig {
 
 pub struct CodeAdapter {
     tools: ToolConfig,
+    /// A repository-wide index, when one has been built.
+    ///
+    /// Without it, impact analysis can only see the file in front of it, which in a real project
+    /// means rung 3 selects no tests and passes for free. With it, a change reaches callers and
+    /// tests wherever they live.
+    index: Option<Arc<index::RepoIndex>>,
 }
 
 impl Default for CodeAdapter {
@@ -82,11 +89,22 @@ impl CodeAdapter {
     pub fn new() -> Self {
         CodeAdapter {
             tools: ToolConfig::default(),
+            index: None,
         }
     }
 
     pub fn with_tools(tools: ToolConfig) -> Self {
-        CodeAdapter { tools }
+        CodeAdapter { tools, index: None }
+    }
+
+    /// Give the adapter a repository-wide view.
+    pub fn with_index(mut self, index: Arc<index::RepoIndex>) -> Self {
+        self.index = Some(index);
+        self
+    }
+
+    pub fn index(&self) -> Option<&Arc<index::RepoIndex>> {
+        self.index.as_ref()
     }
 
     fn spec(&self, path: &str) -> Result<&'static LangSpec> {
@@ -147,7 +165,41 @@ impl Adapter for CodeAdapter {
     }
 
     fn impact(&self, outline: &Outline, delta: &Delta) -> ImpactSet {
-        impact::analyse(outline, delta)
+        let local = impact::analyse(outline, delta);
+        let Some(index) = &self.index else {
+            return local;
+        };
+
+        // Union rather than replace. The index knows the repository as it was when it was built,
+        // and the local outline knows the file as it is now, including entities added by the edit
+        // that is being verified. Taking only one of them loses whichever the other saw, and the
+        // cost of over-selecting is a few extra tests while the cost of under-selecting is a
+        // false green.
+        let wide = index.impact(delta);
+        let mut merged = ImpactSet {
+            entities: local.entities,
+            tests: local.tests,
+            units: local.units,
+        };
+        for id in wide.entities {
+            if !merged.entities.contains(&id) {
+                merged.entities.push(id);
+            }
+        }
+        for t in wide.tests {
+            if !merged.tests.contains(&t) {
+                merged.tests.push(t);
+            }
+        }
+        for u in wide.units {
+            if !merged.units.contains(&u) {
+                merged.units.push(u);
+            }
+        }
+        merged.entities.sort();
+        merged.tests.sort();
+        merged.units.sort();
+        merged
     }
 
     fn pack(&self, req: &PackRequest<'_>) -> Result<Pack> {
@@ -293,6 +345,47 @@ fn checks_wrapper() { assert_eq!(wrapper(), 2); }
         let rungs = ladder_for("app.py", &ToolConfig::default());
         assert_eq!(rungs.len(), 5);
         assert_eq!(rungs[0].name(), "reparse");
+    }
+
+    #[test]
+    fn an_indexed_adapter_selects_tests_the_file_cannot_see() {
+        // The same adapter, the same delta, with and without a repository view.
+        let bare = CodeAdapter::new();
+        let core = Artifact::new(
+            "src/core.rs",
+            b"pub fn core() -> u32 {\n    1\n}\n".to_vec(),
+        );
+        let mid = Artifact::new(
+            "src/mid.rs",
+            b"pub fn wrapper() -> u32 {\n    core() + 1\n}\n".to_vec(),
+        );
+        let tests = Artifact::new(
+            "src/tests.rs",
+            b"#[test]\nfn checks() {\n    assert_eq!(wrapper(), 2);\n}\n".to_vec(),
+        );
+        let outlines: Vec<_> = [&core, &mid, &tests]
+            .iter()
+            .map(|a| ((*a).clone(), bare.outline(a).unwrap()))
+            .collect();
+
+        let delta = Delta {
+            changed: vec!["fn:core".into()],
+            ..Default::default()
+        };
+        let core_outline = &outlines[0].1;
+
+        assert!(
+            bare.impact(core_outline, &delta).tests.is_empty(),
+            "without an index there is nothing in this file to find"
+        );
+
+        let indexed = CodeAdapter::new().with_index(Arc::new(index::RepoIndex::build(&outlines)));
+        let wide = indexed.impact(core_outline, &delta);
+        assert!(
+            wide.tests.contains(&"checks".to_string()),
+            "with an index the test two files away is selected: {:?}",
+            wide.tests
+        );
     }
 
     #[test]

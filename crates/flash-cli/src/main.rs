@@ -169,6 +169,7 @@ async fn main() {
         "run" => run(args).await,
         "worktree" => worktree(args),
         "churn" => churn(args),
+        "impact" => impact(args),
         "serve" => serve(args).await,
         "demo" => demo(args).await,
         "stats" => stats(args),
@@ -185,6 +186,7 @@ fn help() {
          flash serve [--root DIR] [--planner-cmd CMD] [--executor-cmd CMD]\n  \
          flash worktree <dest> [--root DIR]   a working tree that shares bytes with the store\n  \
          flash churn [N] [--root DIR]         what a commit in this repo actually rewrites\n  \
+         flash impact <entity-id> [--root DIR]  which tests a change to that entity reaches\n  \
          flash demo [--live] [--json] [--scale F]\n  \
          flash stats [--store DIR]\n  \
          flash show <hash> [--store DIR]\n\n\
@@ -688,6 +690,118 @@ fn worktree(args: Args) {
             );
         }
     }
+}
+
+// ---- impact --------------------------------------------------------------------------------
+
+/// What breaks if this changes?
+///
+/// Indexes the repository, then walks reference edges across every file to find the tests and
+/// files a change to one entity can reach. Useful on its own, and it is the same index the verify
+/// ladder uses to pick which tests to run after an edit.
+fn impact(args: Args) {
+    let Some(target) = args.rest.first().cloned() else {
+        eprintln!(
+            "usage: flash impact <entity-id> [--root DIR]\n\
+             run without an entity id to list what is indexed, e.g. fn:Parser::parse"
+        );
+        std::process::exit(2);
+    };
+
+    let adapter = CodeAdapter::new();
+    let mut files: Vec<(flash_adapter::Artifact, flash_adapter::Outline)> = Vec::new();
+    let mut stack = vec![args.root.clone()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if path.is_dir() {
+                if matches!(name.as_ref(), "target" | ".git" | ".flash" | "node_modules") {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+            let rel = path
+                .strip_prefix(&args.root)
+                .unwrap_or(&path)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if !adapter.handles(&rel) {
+                continue;
+            }
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            let artifact = flash_adapter::Artifact::new(rel, bytes);
+            if let Ok(outline) = adapter.outline(&artifact) {
+                files.push((artifact, outline));
+            }
+        }
+    }
+
+    if files.is_empty() {
+        eprintln!(
+            "no source files this runtime handles under {}",
+            args.root.display()
+        );
+        std::process::exit(1);
+    }
+
+    let started = std::time::Instant::now();
+    let ix = flash_adapter_code::index::RepoIndex::build(&files);
+    let build_ms = started.elapsed().as_millis();
+
+    println!(
+        "  indexed {} entities across {} files in {build_ms} ms",
+        ix.len(),
+        ix.files()
+    );
+
+    if ix.get(&target).is_none() {
+        eprintln!("\n  {target} is not in the index. Nearby ids:");
+        let needle = target.rsplit(':').next().unwrap_or(&target).to_lowercase();
+        let mut shown = 0;
+        for (id, _) in files
+            .iter()
+            .flat_map(|(_, o)| o.entities.iter().map(|e| (e.id.clone(), e.kind.clone())))
+        {
+            if id.to_lowercase().contains(&needle) && shown < 10 {
+                eprintln!("    {id}");
+                shown += 1;
+            }
+        }
+        std::process::exit(1);
+    }
+
+    let seeds = vec![target.clone()];
+    let tests = ix.reachable_tests(&seeds);
+    let touched_files = ix.reachable_files(&seeds);
+    let reached = ix.reachable(&seeds);
+
+    println!("\n  changing {target} reaches:");
+    println!("    {} entities", reached.len());
+    println!("    {} files", touched_files.len());
+    println!("    {} tests", tests.len());
+
+    if !tests.is_empty() {
+        println!("\n  tests worth running:");
+        for t in tests.iter().take(20) {
+            println!("    {t}");
+        }
+        if tests.len() > 20 {
+            println!("    and {} more", tests.len() - 20);
+        }
+    }
+
+    println!(
+        "\n  Resolution is by simple name, so this over-links where a name is reused rather than\n  \
+         missing an edge. Extra tests cost seconds; a missed test costs a false green."
+    );
 }
 
 // ---- churn ---------------------------------------------------------------------------------
