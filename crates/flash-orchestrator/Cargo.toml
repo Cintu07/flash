@@ -1,0 +1,19 @@
+[package]
+name = "flash-orchestrator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+flash-core.workspace = true
+flash-adapter.workspace = true
+flash-adapter-code.workspace = true
+flash-engine.workspace = true
+flash-store.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
