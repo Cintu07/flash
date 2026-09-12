@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/flash-core",
+    "crates/flash-adapter",
+    "crates/flash-adapter-code",
+    "crates/flash-adapter-doc",
+    "crates/flash-adapter-sheets",
+    "crates/flash-adapter-slides",
+    "crates/flash-store",
+    "crates/flash-engine",
+    "crates/flash-orchestrator",
+    "crates/flash-bench",
+    "crates/flash-server",
+    "crates/flash-stub",
+    "crates/flash-cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+rust-version = "1.90"
+
+[workspace.dependencies]
+flash-core = { path = "crates/flash-core" }
+flash-adapter = { path = "crates/flash-adapter" }
+flash-adapter-code = { path = "crates/flash-adapter-code" }
+flash-adapter-doc = { path = "crates/flash-adapter-doc" }
+flash-adapter-sheets = { path = "crates/flash-adapter-sheets" }
+flash-adapter-slides = { path = "crates/flash-adapter-slides" }
+flash-store = { path = "crates/flash-store" }
+flash-engine = { path = "crates/flash-engine" }
+flash-orchestrator = { path = "crates/flash-orchestrator" }
+flash-bench = { path = "crates/flash-bench" }
+flash-server = { path = "crates/flash-server" }
+flash-stub = { path = "crates/flash-stub" }
+blake3 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"] }
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
