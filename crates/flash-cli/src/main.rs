@@ -13,6 +13,7 @@
 //!     flash run "handle empty input" src/lib.rs \
 //!       --planner-cmd "my-llm --model big" --executor-cmd "my-llm --model small"
 
+use flash_adapter::Adapter;
 use flash_adapter_code::CodeAdapter;
 use flash_adapter_doc::DocAdapter;
 use flash_adapter_sheets::SheetsAdapter;
@@ -24,7 +25,7 @@ use flash_engine::{
 use flash_orchestrator::model::{CommandModel, ModelClient};
 use flash_orchestrator::{Runtime, RuntimeConfig, Task};
 use flash_server::{Server, ServerConfig};
-use flash_store::Store;
+use flash_store::{Store, TreeSpec, Worktree};
 use flash_stub::{Bucket, StubExecutor, StubOp, mutate_source, stub_node};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -166,6 +167,8 @@ async fn main() {
     let args = parse_args();
     match args.cmd.as_str() {
         "run" => run(args).await,
+        "worktree" => worktree(args),
+        "churn" => churn(args),
         "serve" => serve(args).await,
         "demo" => demo(args).await,
         "stats" => stats(args),
@@ -180,6 +183,8 @@ fn help() {
          usage:\n  \
          flash run \"<instruction>\" <file>...  --planner-cmd CMD --executor-cmd CMD [--root DIR]\n  \
          flash serve [--root DIR] [--planner-cmd CMD] [--executor-cmd CMD]\n  \
+         flash worktree <dest> [--root DIR]   a working tree that shares bytes with the store\n  \
+         flash churn [N] [--root DIR]         what a commit in this repo actually rewrites\n  \
          flash demo [--live] [--json] [--scale F]\n  \
          flash stats [--store DIR]\n  \
          flash show <hash> [--store DIR]\n\n\
@@ -557,6 +562,264 @@ fn show(args: Args) {
             std::process::exit(1);
         }
     }
+}
+
+// ---- worktree ------------------------------------------------------------------------------
+
+/// Give an agent its own working tree without giving it its own copy of the bytes.
+///
+/// Four agents on one repository means four checkouts and four times the disk. The store already
+/// holds every file version exactly once, so a tree is a directory of hard links into it, and the
+/// fourth agent costs directory entries rather than gigabytes.
+fn worktree(args: Args) {
+    let Some(dest) = args.rest.first().cloned() else {
+        eprintln!(
+            "usage: flash worktree <dest> [--root DIR] [--store DIR]\n\
+             ingests --root once, then materializes it at <dest> by hard linking from the store."
+        );
+        std::process::exit(2);
+    };
+
+    let store = match Store::open(&args.store) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cannot open store: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    // Skip what no agent needs a private copy of, and what would dwarf the source anyway.
+    let skip = [".git", "target", "node_modules", ".flash"];
+    let source = Worktree::new(&store.content, &args.root);
+    let spec: TreeSpec = match source.ingest(&skip) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cannot read {}: {e}", args.root.display());
+            std::process::exit(1);
+        }
+    };
+
+    let tree = Worktree::new(&store.content, &dest);
+    match tree.materialize(&spec) {
+        Err(e) => {
+            eprintln!("cannot materialize {dest}: {e}");
+            std::process::exit(1);
+        }
+        Ok(stats) => {
+            let mb = |b: u64| format!("{:.1} MB", b as f64 / 1_048_576.0);
+            println!("  {dest}");
+            println!(
+                "  {} files, {} logical, {} written",
+                stats.files,
+                mb(stats.logical_bytes),
+                mb(stats.bytes_written())
+            );
+            println!(
+                "  {} linked to content already stored, {} copied, {} unchanged",
+                stats.linked, stats.copied, stats.unchanged
+            );
+            if stats.copied > 0 {
+                println!(
+                    "\n  {} files could not be linked and were copied. That happens across volumes\n  \
+                     or on a filesystem without hard links; the tree is correct either way.",
+                    stats.copied
+                );
+            }
+            println!(
+                "\n  store blobs are read only. Tools that write a temp file and rename it over the\n  \
+                 target are safe; a tool that writes in place will be refused, and `detach` gives\n  \
+                 that file a private copy."
+            );
+        }
+    }
+}
+
+// ---- churn ---------------------------------------------------------------------------------
+
+/// Answer "is this worth it for my repo" with the repo's own history.
+fn churn(args: Args) {
+    let repo = args.root.clone();
+    let commits: usize = args
+        .rest
+        .first()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(100);
+
+    let git = |a: &[&str]| -> Option<String> {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(&repo)
+            .args(a)
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+    };
+
+    if git(&["rev-parse", "--git-dir"]).is_none() {
+        eprintln!("{} is not a git repository", repo.display());
+        std::process::exit(1);
+    }
+
+    let adapter = CodeAdapter::new();
+    let revs: Vec<String> = git(&["log", "--format=%H", "-n", &commits.to_string()])
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    if revs.len() < 2 {
+        eprintln!("need at least two commits");
+        std::process::exit(1);
+    }
+
+    // One long-lived `git cat-file --batch` instead of a `git show` per file.
+    //
+    // The per-file version spawned two processes for every changed file, which on a hundred
+    // commits is a thousand processes, and on Windows that storm wedges: the tool sat at zero cpu
+    // with a child git that never returned. Reading blobs over one pipe is both the fix and about
+    // ten times faster, and it is how git itself expects to be scripted.
+    let mut cat = match std::process::Command::new("git")
+        .arg("-C")
+        .arg(&repo)
+        .args(["cat-file", "--batch"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("cannot start git cat-file: {e}");
+            std::process::exit(1);
+        }
+    };
+    let mut cat_in = cat.stdin.take().expect("stdin was piped");
+    let mut cat_out = std::io::BufReader::new(cat.stdout.take().expect("stdout was piped"));
+
+    let mut at = |rev: &str, path: &str| -> Option<Vec<u8>> {
+        use std::io::{BufRead, Read, Write};
+        writeln!(cat_in, "{rev}:{path}").ok()?;
+        cat_in.flush().ok()?;
+
+        // Header is either "<sha> <type> <size>" or "<what> missing".
+        let mut header = String::new();
+        cat_out.read_line(&mut header).ok()?;
+        let fields: Vec<&str> = header.split_whitespace().collect();
+        if fields.len() < 3 {
+            return None; // missing object, and nothing follows it on the pipe
+        }
+        let size: usize = fields[2].parse().ok()?;
+
+        // Drain the body even when it is not a blob. git writes the object after the header
+        // whatever its type, so returning early here leaves those bytes in the pipe, the next
+        // header read consumes object data instead, and the read after that blocks forever on a
+        // length parsed out of garbage. One unread tree object wedges the whole run.
+        let mut body = vec![0u8; size + 1]; // git appends a newline after the object
+        cat_out.read_exact(&mut body).ok()?;
+        body.truncate(size);
+
+        (fields[1] == "blob").then_some(body)
+    };
+
+    // Guard rails, because this runs against repositories nobody has looked at first. A single
+    // generated file or a thousand file reformat commit should cost a skip line, never a hang.
+    const MAX_FILE_BYTES: usize = 512 * 1024;
+    const MAX_FILES_PER_COMMIT: usize = 200;
+
+    let (mut files, mut total, mut changed) = (0usize, 0usize, 0usize);
+    let (mut skipped_big, mut skipped_wide) = (0usize, 0usize);
+    let mut ratios: Vec<f64> = Vec::new();
+
+    for (i, pair) in revs.windows(2).enumerate() {
+        if i % 10 == 0 {
+            eprint!("\r  {i}/{} commits", revs.len() - 1);
+        }
+        let (newer, older) = (&pair[0], &pair[1]);
+        let Some(list) = git(&["diff", "--name-only", older, newer]) else {
+            continue;
+        };
+        let touched: Vec<&str> = list
+            .lines()
+            .filter(|p| !p.is_empty() && adapter.handles(p))
+            .collect();
+        // A commit that rewrites the world is a reformat or a vendor drop, and averaging it in
+        // says more about that one commit than about how the project is worked on.
+        if touched.len() > MAX_FILES_PER_COMMIT {
+            skipped_wide += 1;
+            continue;
+        }
+        for path in touched {
+            let Some(new_bytes) = at(newer, path) else {
+                continue;
+            };
+            if new_bytes.len() > MAX_FILE_BYTES {
+                skipped_big += 1;
+                continue;
+            }
+            let new_art = flash_adapter::Artifact::new(path.to_string(), new_bytes);
+            let Ok(new_outline) = adapter.outline(&new_art) else {
+                continue;
+            };
+            if new_outline.entities.is_empty() {
+                continue;
+            }
+            let (old_art, old_outline) = match at(older, path) {
+                Some(b) => {
+                    let a = flash_adapter::Artifact::new(path.to_string(), b);
+                    match adapter.outline(&a) {
+                        Ok(o) => (a, o),
+                        Err(_) => continue,
+                    }
+                }
+                None => (
+                    flash_adapter::Artifact::new(path.to_string(), Vec::new()),
+                    flash_adapter::Outline {
+                        path: path.to_string(),
+                        entities: Vec::new(),
+                    },
+                ),
+            };
+            let delta =
+                flash_adapter::delta_between(&old_outline, &new_outline, &old_art, &new_art);
+            let c = delta.changed.len() + delta.added.len() + delta.removed.len();
+            files += 1;
+            total += new_outline.entities.len();
+            changed += c;
+            ratios.push(c as f64 / new_outline.entities.len().max(1) as f64);
+        }
+    }
+
+    drop(cat_in);
+    let _ = cat.wait();
+    eprint!("\r                              \r");
+    if files == 0 {
+        eprintln!("no source files this runtime handles were touched in those commits");
+        std::process::exit(1);
+    }
+    ratios.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+    if skipped_big > 0 || skipped_wide > 0 {
+        println!(
+            "  skipped {skipped_big} files over 512 KB and {skipped_wide} commits touching over \
+             200 files"
+        );
+    }
+    println!("  {} commits, {} file revisions", revs.len() - 1, files);
+    println!("  {total} entities in the files those commits touched");
+    println!("  {changed} of them actually changed");
+    println!(
+        "\n  a commit in this repo rewrites {:.1}% of the entities in the files it touches",
+        changed as f64 / total as f64 * 100.0
+    );
+    println!(
+        "  median per file revision: {:.1}%",
+        ratios[ratios.len() / 2] * 100.0
+    );
+    println!(
+        "\n  An agent that re-reads and re-writes whole files does work proportional to {total}.\n  \
+         One that edits named entities and caches the rest does work proportional to {changed}.\n  \
+         No model ran to produce this: it is your history, parsed."
+    );
 }
 
 fn secs(ms: u64) -> String {
