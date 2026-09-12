@@ -533,10 +533,66 @@ fn stats(args: Args) {
             std::process::exit(1);
         }
     };
-    let (hits, misses) = store.memo.counters();
     println!("store: {}", store.root().display());
-    println!("memo lookups this process: {hits} hit, {misses} miss");
-    println!("(node history is on disk under history/, keyed by node key)");
+
+    // Report the shape, not just the size. Every part of this store is many small files, which is
+    // the right call while a store is small and the wrong one at a few million entries: a 45 byte
+    // history record still costs a filesystem block. The number that decides whether this needs an
+    // embedded key value store instead is the ratio below, so print it rather than argue about it.
+    const BLOCK: u64 = 4096;
+    let mut grand_files = 0u64;
+    let mut grand_bytes = 0u64;
+    let mut grand_allocated = 0u64;
+
+    println!("\n  part      files      bytes   mean   on disk  waste");
+    for part in ["blobs", "memo", "history", "journal"] {
+        let dir = store.root().join(part);
+        let (mut files, mut bytes) = (0u64, 0u64);
+        let mut stack = vec![dir];
+        while let Some(d) = stack.pop() {
+            let Ok(entries) = std::fs::read_dir(&d) else {
+                continue;
+            };
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.is_dir() {
+                    stack.push(p);
+                } else if let Ok(m) = e.metadata() {
+                    files += 1;
+                    bytes += m.len();
+                }
+            }
+        }
+        let allocated = files * BLOCK.max(1);
+        grand_files += files;
+        grand_bytes += bytes;
+        grand_allocated += allocated;
+        println!(
+            "  {part:<9} {files:>5} {bytes:>10} {:>6} {:>9} {:>5.1}x",
+            bytes.checked_div(files).unwrap_or(0),
+            allocated,
+            if bytes > 0 {
+                allocated as f64 / bytes as f64
+            } else {
+                0.0
+            }
+        );
+    }
+
+    let (hits, misses) = store.memo.counters();
+    println!(
+        "\n  {grand_files} files, {grand_bytes} bytes of content occupying about {grand_allocated} \
+         bytes of disk"
+    );
+    println!("  memo lookups this process: {hits} hit, {misses} miss");
+    if grand_files > 500_000 {
+        println!(
+            "\n  Past roughly a million small files this layout stops paying for itself: the waste\n  \
+             column is the cost, and enumerating or rsyncing the store gets slow. The fix is an\n  \
+             embedded key value store in the same directory, not a database server, because the\n  \
+             store being one rsyncable directory is what makes a shared team cache work at all."
+        );
+    }
 }
 
 fn show(args: Args) {

@@ -87,6 +87,41 @@ regression-tested in [dogfood.rs](../crates/flash-adapter-code/tests/dogfood.rs)
 The third is the one worth remembering: a rung that silently passes is indistinguishable from a
 rung that works, and only a real workload tells them apart.
 
+## Storage: measured, and deliberately not changed yet
+
+`flash stats` reports the shape of the store, not just its size, because the question "does this
+need a real database" should be answered by a number:
+
+```
+part      files      bytes   mean   on disk  waste
+memo         32      12987    405    131072  10.1x
+history      20        908     45     81920  90.2x
+```
+
+Every part of the store is many small files. A 45 byte history record still costs a filesystem
+block, so history wastes 90x and memo wastes 10x. One 20 node task writes about 32 memo entries,
+so a team at 200 tasks a day writes 6,400 files a day and around 2.3 million a year: roughly 9 GB
+of disk for under 1 GB of content, with directory enumeration and rsync both degrading.
+
+**The trigger** is the store passing about a million files, which `flash stats` says out loud when
+it happens. **The fix** is an embedded key value store, redb or lmdb, in the same directory. Not a
+database server: the store being one rsyncable directory is the entire mechanism behind a shared
+team cache, and a server takes that away.
+
+Two shapes that look adjacent and are not:
+
+- **A graph or vector database for the memo.** The access pattern is get and put by a 32 byte key,
+  write once, no traversal and no ranking. A specialised store is strictly worse than an embedded
+  key value store here.
+- **Vector search in context packs.** Packs are deterministic assembly on purpose, so that the
+  model call downstream of a pack is cacheable. Retrieval that ranks by similarity changes the
+  pack whenever the index changes, which moves every downstream action key and takes the hit rate
+  to zero without producing a single wrong answer. This one is not a trade off, it is a
+  contradiction with the core design.
+
+Where a graph store would genuinely earn its place is the cross file symbol graph, which is the
+real gap in impact analysis today and is listed below.
+
 ## Open items
 
 - **Eta ignores lane queueing.** Pure critical path; a wide graph on a narrow lane finishes later
