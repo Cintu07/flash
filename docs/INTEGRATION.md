@@ -40,7 +40,7 @@ Claude then has two tools:
 | `flash_status` | fetch a task's result by id, including diagnostics and content hashes |
 
 A model command is anything that reads one json request on stdin and prints one json response on
-stdout. That is the entire contract — flash has no vendor sdk in it, so whatever you already use
+stdout. That is the entire contract, and flash has no vendor sdk in it, so whatever you already use
 for inference works.
 
 ## What actually gets faster
@@ -48,11 +48,11 @@ for inference works.
 Be precise about this, because the honest answer is narrower than "agents get faster".
 
 flash does not make a **cold** task faster. A model still has to type the ops, and that floor is
-8–20 s per real step on the critical path. What it removes is everything you are doing for the
+8 to 20 s per real step on the critical path. What it removes is everything you are doing for the
 second time:
 
-- **Hot** — same request, unchanged inputs: zero model calls, single-digit milliseconds.
-- **Warm** — same request, some inputs changed: only the dirty closure runs. A body edit does not
+- **Hot**, same request and unchanged inputs: zero model calls, single-digit milliseconds.
+- **Warm**, same request with some inputs changed: only the dirty closure runs. A body edit does not
   even re-plan, because the planner depends on file *outlines*, not file contents.
 
 Measured on three real 13 KB source files with decode simulated at 2 s per edit:
@@ -82,7 +82,7 @@ because documents are regenerated far more often than code is rewritten.
    ```
 
 2. The first run costs what it costs. Every later run pays only for the sections whose inputs
-   moved — `methodology` and `definitions` are hot hits, and only pages containing changed blocks
+   moved. `methodology` and `definitions` are hot hits, and only pages containing changed blocks
    are re-rendered.
 
 3. Nothing is written to your working tree. A task produces content; `flash show <hash>` prints
@@ -96,7 +96,7 @@ blake3-addressed, memo entries are keyed on content, and history is keyed on log
 Two people on the same repo, the same adapter versions and the same model versions can share it,
 and the second person's first run is warm.
 
-The fetch/push path for that is not written yet — today you would rsync or mount the directory.
+The fetch/push path for that is not written yet, so today you would rsync or mount the directory.
 The mechanism is ready; the ergonomics are not.
 
 ## What to check before trusting a result

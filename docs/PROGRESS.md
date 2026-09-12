@@ -1,47 +1,47 @@
 # Progress
 
-## 2026-09-12 — the runtime, end to end
+## 2026-09-12: the runtime, end to end
 
 The PRD's phases 0 through 4 are implemented and tested: build engine, four adapters, the
 two-model orchestrator, the benchmark, and the daemon. 199 tests, no compiler warnings, clippy
 clean.
 
-### Phase 0 — the engine, no models
+### Phase 0: the engine, no models
 
 Exit criteria enforced as tests:
 
 - warm rerun recomputes **exactly** the dirty closure on 100 synthetic graphs, checked against an
   oracle in the test that simulates propagation independently, so a superset (slow but
   correct-looking) and a subset (stale output) both fail;
-- eta error under 20% on graphs with history, against stubs that go 2–4x long one run in fourteen;
+- eta error under 20% on graphs with history, against stubs that go 2 to 4 times long one run in fourteen;
 - plus: hot runs make zero executor calls, jobs stream progress and cancel, a dropped run future
   resumes at the frontier from the journal alone with the memo deleted, a failing node skips its
   dependents and is never cached.
 
-### Phase 1 — code adapter, real models
+### Phase 1: code adapter, real models
 
 - tree-sitter symbol graph for rust, python and typescript, with ids derived from names and scopes
   so moving a function within a file changes nothing;
 - entity ops (replace body / signature, insert after, add import, add test, rename, delete) with an
   all-or-nothing materializer that refuses any batch which would break the parse;
 - the unified-diff fallback, anchored on context rather than line numbers;
-- ladder rungs 0–4, with external rungs reporting *unavailable* rather than passing;
+- ladder rungs 0 to 4, with external rungs reporting *unavailable* rather than passing;
 - static test selection over the reference graph;
 - deterministic, minimal context packs: signatures for neighbours, bodies only for the target.
 
-### Phase 2 — doc adapter and the pdf path
+### Phase 2: doc adapter and the pdf path
 
 Block tree with section-scoped ids, block ops capped at 400 words, heading-order / empty-section /
 broken-ref lint, deterministic pagination, and changed-page-only rendering. pdf is a render target,
 never an edit target.
 
-### Phase 3 — benchmark
+### Phase 3: benchmark
 
 `flash-bench` runs frozen tasks through four ablations in three regimes and regenerates every table,
 the attribution chart and the raw measurements with one command. It finds and prints its own losses.
 Model calls are replayed from fixtures and every table says so.
 
-### Phase 4 — be the layer
+### Phase 4: be the layer
 
 Sheets (formula dependency graph, dependent-only recalc, planner assertions) and slides (layout
 rules, contrast, per-slide thumbnails) adapters; json-rpc 2.0 + MCP over stdio with reattach by task
@@ -54,7 +54,7 @@ id; a thin cli.
    work it needed sat finished in the store. Found by the diff-fallback test.
 2. **Expansion names must be scoped under the node that emitted them.** Expansions are cached
    against *action* keys, and two logically different nodes with identical inputs share one action
-   key by design — so a cached expansion can be replayed under a different parent, and absolute
+   key by design, so a cached expansion can be replayed under a different parent, and absolute
    names collide on replay.
 3. **A completed task must clear its journal.** Otherwise the next run replays itself as "resumed"
    and hit/computed counts become meaningless.
@@ -76,11 +76,11 @@ regression-tested in [dogfood.rs](../crates/flash-adapter-code/tests/dogfood.rs)
    op naming `fn:Digest::fmt` was ambiguous and impact analysis conflated them. Trait impls now
    scope as `<Digest as Debug>`.
 2. **The unused-import lint was unsound and is gone.** It fired on `pub use` re-exports and on
-   trait imports used through method syntax — ten diagnostics on this repo, zero true positives.
+   trait imports used through method syntax. Ten diagnostics on this repo, zero true positives.
    Each false positive costs two repair attempts and then fails the task. Rung 2 is a real
    compiler and reports this correctly; rung 1 had no business guessing.
 3. **The verify node was handed an empty delta.** So `dangling-reference` could never fire and
-   impacted-test selection always selected nothing — rung 3 was passing trivially in every run.
+   impacted-test selection always selected nothing. Rung 3 was passing trivially in every run.
    Verify nodes now take the pre-edit artifact as a second input and recompute the delta from
    content.
 

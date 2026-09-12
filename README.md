@@ -23,6 +23,35 @@ Cold work costs what the model costs. A model has to type the ops and that floor
 
 So the question before adopting it is how much of what your agent does each week is a variation of something it already did. Exploring a codebase once: nothing, and flash is overhead. Regenerating a report every quarter, rebuilding a changelog every release, running the same class of edit across a repo: most of it.
 
+## Two answers before you adopt anything
+
+**Is this worth it for my repo?** Ask the repo.
+
+```
+flash churn 120
+```
+
+It parses every source file each commit touched, at that commit and its parent, and counts how many named entities actually moved. No model runs, no API key, a few seconds. On ripgrep's last 119 commits:
+
+```
+8095 entities in the files those commits touched
+534 of them actually changed
+a commit in this repo rewrites 6.6% of the entities in the files it touches
+median per file revision: 6.5%
+```
+
+An agent that re-reads and re-writes whole files does work proportional to 8095. One that edits named entities and caches the rest does work proportional to 534. That ratio is the entire argument, measured on someone else's project rather than asserted.
+
+**Four agents, four checkouts, and a full disk?**
+
+```
+flash worktree ../agent-2
+```
+
+The store already holds every file version exactly once, keyed by hash, so a working tree is a directory of hard links into it. Three trees of this repo: 2.01 MB logical, 670 KB on disk, and `fsutil hardlink list` shows all three copies of `README.md` are one inode. The tenth agent costs directory entries.
+
+Store blobs are read only, so a tool that writes in place is refused rather than silently corrupting every other tree. Almost everything writes a temp file and renames, which is safe and is the same bet pnpm makes for `node_modules`. `detach` gives one file a private copy when a tool genuinely needs to mutate in place.
+
 ## Try it on something real
 
 ```
@@ -72,10 +101,10 @@ When entity ops fail, the executor gets the diagnostics and tries again; when th
 
 204 tests, clippy clean. The claims that have teeth:
 
-- a warm rerun recomputes **exactly** the dirty closure, over 100 generated graphs, checked against an oracle the test computes independently — a superset is the bug every incremental system ships first, because answers stay correct and it is merely slow ([incremental.rs](crates/flash-engine/tests/incremental.rs))
+- a warm rerun recomputes **exactly** the dirty closure, over 100 generated graphs, checked against an oracle the test computes independently. A superset is the bug every incremental system ships first, because answers stay correct and it is merely slow ([incremental.rs](crates/flash-engine/tests/incremental.rs))
 - a crash resumes at the graph frontier: the test drops the run future partway through, deletes the memo store, and the journal alone has to carry it ([jobs_and_recovery.rs](crates/flash-engine/tests/jobs_and_recovery.rs))
 - a failed rung repairs itself and the repair is cached, so the second run of a task that needed one is hot ([expansion.rs](crates/flash-engine/tests/expansion.rs))
-- ETA error under 20 percent once nodes have history, against stubs that run 2–4x long one run in fourteen; a node never run reports unknown instead of a guess ([eta_calibration.rs](crates/flash-engine/tests/eta_calibration.rs))
+- ETA error under 20 percent once nodes have history, against stubs that run 2 to 4 times long one run in fourteen; a node never run reports unknown instead of a guess ([eta_calibration.rs](crates/flash-engine/tests/eta_calibration.rs))
 
 What is not proven: none of the numbers here include real model decode. `cargo run -p flash-bench` replays model calls from fixtures, which makes the cold column an underestimate and the warm and hot columns honest, since what is claimed there is that work does not happen. Recording a cassette against a live planner/executor pair is the next real milestone and every table says so until then.
 
@@ -88,7 +117,7 @@ Running the code adapter over this workspace's own source found three defects th
 - Code reference edges are syntactic. Conservative, so it over-selects tests rather than under-selecting, but coverage data is the real answer.
 - The sheets adapter reads a JSON workbook. The xlsx container is mechanical work that teaches nothing about incremental recompute.
 - The doc and slides vision rungs report unavailable until a vision model is configured.
-- Team cache sharing works mechanically — the store is one directory, blake3-addressed, nothing machine-specific in it — but there is no fetch/push path yet, so today you rsync it.
+- Team cache sharing works mechanically, since the store is one directory, blake3-addressed, with nothing machine-specific in it, but there is no fetch/push path yet, so today you rsync it.
 
 ## Layout
 
