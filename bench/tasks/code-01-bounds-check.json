@@ -1,0 +1,34 @@
+{
+  "id": "code-01-bounds-check",
+  "kind": "code",
+  "instruction": "make parse return None instead of panicking on an empty input",
+  "files": {
+    "src/lib.rs": "pub struct Header {\n    pub name: String,\n}\n\npub fn parse(input: &str) -> Header {\n    Header { name: input[0..1].to_string() }\n}\n\npub fn describe(h: &Header) -> String {\n    format!(\"header {}\", h.name)\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn parses_a_name() {\n        assert_eq!(parse(\"ab\").name, \"a\");\n    }\n}\n"
+  },
+  "targets": ["src/lib.rs"],
+  "plan": {
+    "edits": [
+      {
+        "path": "src/lib.rs",
+        "target": "fn:parse",
+        "instruction": "return an Option and handle the empty case"
+      }
+    ]
+  },
+  "executor": [
+    [
+      "",
+      [
+        {
+          "op": "replace_body",
+          "entity": "fn:parse",
+          "body": "if input.is_empty() {\n    return Header { name: String::new() };\n}\nHeader { name: input[0..1].to_string() }"
+        }
+      ]
+    ]
+  ],
+  "warm_change": [
+    "src/lib.rs",
+    "pub struct Header {\n    pub name: String,\n    pub len: usize,\n}\n\npub fn parse(input: &str) -> Header {\n    Header { name: input[0..1].to_string(), len: input.len() }\n}\n\npub fn describe(h: &Header) -> String {\n    format!(\"header {}\", h.name)\n}\n\n#[cfg(test)]\nmod tests {\n    use super::*;\n\n    #[test]\n    fn parses_a_name() {\n        assert_eq!(parse(\"ab\").name, \"a\");\n    }\n}\n"
+  ]
+}
