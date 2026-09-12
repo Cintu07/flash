@@ -39,6 +39,15 @@ impl ContentStore {
     pub fn has(&self, d: &Digest) -> bool {
         shard_path(&self.root, &d.hex(), "").exists()
     }
+
+    /// Where this content lives on disk.
+    ///
+    /// Exposed so a working tree can hard link to it instead of copying it. That is the only
+    /// legitimate reason to want this path: the bytes are write once, and anything that opens one
+    /// of these files for writing is corrupting shared content.
+    pub fn path_of(&self, d: &Digest) -> PathBuf {
+        shard_path(&self.root, &d.hex(), "")
+    }
 }
 
 #[cfg(test)]

@@ -20,11 +20,13 @@ mod cas;
 mod history;
 mod journal;
 mod memo;
+mod worktree;
 
 pub use cas::ContentStore;
 pub use history::{History, Stats};
 pub use journal::{Journal, JournalEntry};
 pub use memo::{MemoEntry, MemoStore};
+pub use worktree::{MaterializeStats, TreeSpec, Worktree};
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
